@@ -1,107 +1,84 @@
-from HTMLParser import HTMLParser
-import requests
-import pyttsx
-
-from pprint import pprint
+from lxml import html
+from Queue import Queue
+import threading
 
 
-def get_webtext(url):
-    page = requests.get(url)
-    return page.text
-
-
-def getAttrInListOfTuples(attr, theList):
-    for tup in theList:
-        if attr == tup[0]:
-            return tup[1]
-
-
-class WikiParse(HTMLParser):
-
+class Speaker(threading.Thread):
     def __init__(self):
+        threading.Thread.__init__(self)
+        self.daemon = True
+        import pyttsx
+
+        self.voiceengine = pyttsx.init()
+        # self.voiceengine.connect('started-word', self.onWord)
+
+        self.wordqueue = Queue()
+
+        self.shouldStop = False
+        self.lock = threading.Lock()
+
+    # Allow us to stop on words
+    def onWord(self, name, location, length):
+        if self._checkToStop():
+            self.voiceengine.stop()
+
+    def enqueue_words(self, words):
+        self.wordqueue.put(words)
+
+    def interrupt(self):
         """
-        Initialize variables to keep track of state
+        Sets the speaker to stop at the end of the next spoken word
         """
-        # Call parent constructor
-        HTMLParser.__init__(self)
+        self.lock.acquire()
+        self.shouldStop = True
+        self.lock.release()
 
-        # State for tracking depth
-        self.allow_printing = False
-        self.depth = 0
-        self.currenttag = ''
+    def _checkToStop(self):
+        result = None
+        self.lock.acquire()
+        result = bool(self.shouldStop)
+        self.lock.release()
+        return result
 
-        # Array of content things
-        self.output = []
-        # A list of dictionaries, with keys = ['href', 'content']
-        self.links = []
+    def run(self):
+        self.voiceengine.startLoop(False)
 
-        self.num = 0
+        while True:
+            print "getting..."
+            item = self.wordqueue.get()
+            print item
+            self.voiceengine.say(item)
+            self.voiceengine.iterate()
 
-    def handle_starttag(self, tag, attrs):
-        self.num += 1
-        print self.num
+        self.voiceengine.endLoop()
+        return
 
-        # Find the div we care about; it has id="mw-content-text"
-        if not self.allow_printing:
-            for tup in attrs:
-                # Look for a tag with mw-content-text as id
-                if 'id' == tup[0] and 'mw-content-text' in tup[1:]:
-                    self.allow_printing = True
-                    break
-
-        # Once we do, start printing data and keeping track of depth
-        if self.allow_printing:
-            self.depth += 1
-            self.currenttag = tag
-
-            # import pdb; pdb.set_trace()
-
-            if self.currenttag == 'a':
-                self.links.append({
-                    'href': getAttrInListOfTuples(u'href', attrs)
-                })
-
-    def handle_endtag(self, tag):
-        # If we encounter an end tag with the same depth as
-        # our starting div, we should stop!
-        if self.allow_printing:
-            self.depth -= 1
-            if self.depth == 0:
-                self.allow_printing = False
-
-    def handle_data(self, data):
-        print self.num
-        # Once we find our div, start capturing everything
-        if self.allow_printing:
-            if self.depth < 4:
-                # Capture this data in the ouput list
-                self.output.append(data.encode('ascii', 'ignore'))
-            if self.currenttag == 'a':
-                # Capture links
-                print data
-                self.links[-1]['content'] = data
 
 if __name__ == "__main__":
-    # GOAL: Read wikipedia.org/philosophy to user
-
     # Get a webpage
-    # webtext = get_webtext("https://en.wikipedia.org/wiki/Deus_Ex")
     webtext = """
-    <html id="mw-content-text">
+    <html>
     <body>
-    <a href='fuck'> dick<p>asdf</p> </a>
+    <div id="mw-content-text">
+    <p><a href='fuck'> dick </a></p>
+    <p><a href='fuck'> cock </a></p>
+    <p><a href='fuck'> brandon </a></p>
+    <p><a href='fuck'> ayy </a></p>
+    </div>
     </body>
     </html>
-
     """
 
     # Build and use our parser
-    parser = WikiParse()
-    parser.feed(webtext)
+    tree = html.fromstring(webtext)
+    content = tree.xpath('//*[@id="mw-content-text"]')
+    links = tree.xpath('//*[@id="mw-content-text"]/p/a')
 
-    # Create speaking engine
-    engine = pyttsx.init()
-    import pdb; pdb.set_trace()
-    engine.say([item['content'] for item in parser.links])
-    engine.setProperty('voices', u'com.apple.speech.synthesis.voice.Hysterical')
-    engine.runAndWait()
+    # Read links to user
+    for i in xrange(0, len(links), 8):
+        for j, link in enumerate(links[i:i + 8]):
+            # Only print the first 9 entries
+            # Then give a message for getting more choices
+
+            output = 'Press {0} for {1}'.format(j + 1, link.text_content())
+            print output
